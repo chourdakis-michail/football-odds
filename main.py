@@ -23,7 +23,6 @@ def fetch_api_data(endpoint):
     url = BASE_URL + endpoint
     response = requests.get(url, headers=headers)
     
-    # Διαχείριση Rate Limiting / Throttling
     if response.status_code == 429:
         retry_after = int(response.headers.get("X-RequestCounter-Reset", 60))
         st.warning(f"Φτάσατε το όριο αιτημάτων. Αναμονή {retry_after} δευτερολέπτων...")
@@ -70,18 +69,43 @@ if "teams_data" in st.session_state:
     with col2:
         away_team_name = st.selectbox("Φιλοξενούμενη Ομάδα:", teams_list, index=min(1, len(teams_list)-1))
 
-    # Υπολογισμός στατιστικών από τη βαθμολογία
+    # Υπολογισμός στατιστικών από τη βαθμολογία (Τρέχουσα Σεζόν)
     home_stats = next(item for item in st.session_state["teams_data"] if item["team"]["name"] == home_team_name)
     away_stats = next(item for item in st.session_state["teams_data"] if item["team"]["name"] == away_team_name)
 
     home_played = home_stats["playedGames"] if home_stats["playedGames"] > 0 else 1
     away_played = away_stats["playedGames"] if away_stats["playedGames"] > 0 else 1
 
-    home_gf_avg = home_stats["goalsFor"] / home_played
-    home_ga_avg = home_stats["goalsAgainst"] / home_played
+    home_gf_curr = home_stats["goalsFor"] / home_played
+    home_ga_curr = home_stats["goalsAgainst"] / home_played
 
-    away_gf_avg = away_stats["goalsFor"] / away_played
-    away_ga_avg = away_stats["goalsAgainst"] / away_played
+    away_gf_curr = away_stats["goalsFor"] / away_played
+    away_ga_curr = away_stats["goalsAgainst"] / away_played
+
+    # Επιλογή Συνυπολογισμού Περσινής Σεζόν
+    st.markdown("---")
+    use_prev_season = st.checkbox("➕ Συνυπολογισμός Περσινών Στατιστικών (Ιδανικό για τις πρώτες αγωνιστικές)")
+
+    home_gf_final = home_gf_curr
+    home_ga_final = home_ga_curr
+    away_gf_final = away_gf_curr
+    away_ga_final = away_ga_curr
+
+    if use_prev_season:
+        st.info("Εισάγετε τους μέσους όρους της περσινής σεζόν. Το μοντέλο θα υπολογίσει: **70% Φετινά + 30% Περσινά**.")
+        col_prev1, col_prev2 = st.columns(2)
+        with col_prev1:
+            prev_home_gf = st.number_input(f"Περσινά γκολ/αγώνα {home_team_name} (Σκοράρει):", value=home_gf_curr, step=0.1)
+            prev_home_ga = st.number_input(f"Περσινά γκολ/αγώνα {home_team_name} (Δέχεται):", value=home_ga_curr, step=0.1)
+        with col_prev2:
+            prev_away_gf = st.number_input(f"Περσινά γκολ/αγώνα {away_team_name} (Σκοράρει):", value=away_gf_curr, step=0.1)
+            prev_away_ga = st.number_input(f"Περσινά γκολ/αγώνα {away_team_name} (Δέχεται):", value=away_ga_curr, step=0.1)
+
+        # Σταθμισμένος Μέσος Όρος (70% Φετινά - 30% Περσινά)
+        home_gf_final = (home_gf_curr * 0.7) + (prev_home_gf * 0.3)
+        home_ga_final = (home_ga_curr * 0.7) + (prev_home_ga * 0.3)
+        away_gf_final = (away_gf_curr * 0.7) + (prev_away_gf * 0.3)
+        away_ga_final = (away_ga_curr * 0.7) + (prev_away_ga * 0.3)
 
     # Υπολογισμός Μέσου Όρου Πρωταθλήματος
     total_goals = sum(item["goalsFor"] for item in st.session_state["teams_data"])
@@ -89,67 +113,46 @@ if "teams_data" in st.session_state:
     league_avg_goals = (total_goals / total_games / 2) if total_games > 0 else 1.3
 
     st.markdown("---")
-    st.subheader("📊 Στατιστικά Μέσων Όρων")
+    st.subheader("📊 Τελικοί Μέσοι Όροι Μοντέλου")
     c1, c2 = st.columns(2)
-    c1.write(f"**{home_team_name}**: {home_gf_avg:.2f} γκολ/αγώνα (Σκοράρει), {home_ga_avg:.2f} γκολ/αγώνα (Δέχεται)")
-    c2.write(f"**{away_team_name}**: {away_gf_avg:.2f} γκολ/αγώνα (Σκοράρει), {away_ga_avg:.2f} γκολ/αγώνα (Δέχεται)")
+    c1.write(f"**{home_team_name}**: {home_gf_final:.2f} γκολ/αγώνα (Σκοράρει), {home_ga_final:.2f} γκολ/αγώνα (Δέχεται)")
+    c2.write(f"**{away_team_name}**: {away_gf_final:.2f} γκολ/αγώνα (Σκοράρει), {away_ga_final:.2f} γκολ/αγώνα (Δέχεται)")
 
     if st.button("Υπολογισμός Πιθανοτήτων Poisson"):
         # Υπολογισμός xG
-        attack_home = home_gf_avg / league_avg_goals if league_avg_goals else 1
-        defense_away = away_ga_avg / league_avg_goals if league_avg_goals else 1
+        attack_home = home_gf_final / league_avg_goals if league_avg_goals else 1
+        defense_away = away_ga_final / league_avg_goals if league_avg_goals else 1
         lambda_home = attack_home * defense_away * league_avg_goals
 
-        attack_away = away_gf_avg / league_avg_goals if league_avg_goals else 1
-        defense_home = home_ga_avg / league_avg_goals if league_avg_goals else 1
+        attack_away = away_gf_final / league_avg_goals if league_avg_goals else 1
+        defense_home = home_ga_final / league_avg_goals if league_avg_goals else 1
         lambda_away = attack_away * defense_home * league_avg_goals
 
         # Υπολογισμός Πλέγματος Πιθανοτήτων
         max_goals = 7
-        prob_home_win = 0.0
-        prob_draw = 0.0
-        prob_away_win = 0.0
-        
-        prob_under_25 = 0.0
-        prob_over_25 = 0.0
+        prob_home_win, prob_draw, prob_away_win = 0.0, 0.0, 0.0
+        prob_under_25, prob_over_25 = 0.0, 0.0
 
         for h in range(max_goals):
             for a in range(max_goals):
                 p = poisson_probability(h, lambda_home) * poisson_probability(a, lambda_away)
-                
-                # 1X2
-                if h > a:
-                    prob_home_win += p
-                elif h == a:
-                    prob_draw += p
-                else:
-                    prob_away_win += p
-                
-                # Over / Under 2.5
-                if (h + a) < 2.5:
-                    prob_under_25 += p
-                else:
-                    prob_over_25 += p
+                if h > a: prob_home_win += p
+                elif h == a: prob_draw += p
+                else: prob_away_win += p
+
+                if (h + a) < 2.5: prob_under_25 += p
+                else: prob_over_25 += p
 
         st.markdown("---")
         st.subheader("🎯 Αποτελέσματα Αγώνα (1X2) & Fair Odds")
         col_res1, col_res2, col_res3 = st.columns(3)
-
-        odd_home = 1 / prob_home_win if prob_home_win > 0 else 0
-        odd_draw = 1 / prob_draw if prob_draw > 0 else 0
-        odd_away = 1 / prob_away_win if prob_away_win > 0 else 0
-
-        col_res1.metric("1 (Νίκη Γηπεδούχου)", f"{prob_home_win*100:.1f}%", f"Απόδοση: {odd_home:.2f}")
-        col_res2.metric("X (Ισοπαλία)", f"{prob_draw*100:.1f}%", f"Απόδοση: {odd_draw:.2f}")
-        col_res3.metric("2 (Νίκη Φιλοξενούμενου)", f"{prob_away_win*100:.1f}%", f"Απόδοση: {odd_away:.2f}")
+        col_res1.metric("1 (Νίκη Γηπεδούχου)", f"{prob_home_win*100:.1f}%", f"Απόδοση: {(1/prob_home_win if prob_home_win else 0):.2f}")
+        col_res2.metric("X (Ισοπαλία)", f"{prob_draw*100:.1f}%", f"Απόδοση: {(1/prob_draw if prob_draw else 0):.2f}")
+        col_res3.metric("2 (Νίκη Φιλοξενούμενου)", f"{prob_away_win*100:.1f}%", f"Απόδοση: {(1/prob_away_win if prob_away_win else 0):.2f}")
 
         st.markdown("---")
         st.subheader("⚽ Αγορά Γκολ (Over / Under 2.5)")
         col_ou1, col_ou2 = st.columns(2)
-
-        odd_under = 1 / prob_under_25 if prob_under_25 > 0 else 0
-        odd_over = 1 / prob_over_25 if prob_over_25 > 0 else 0
-
-        col_ou1.metric("Under 2.5 Γκολ", f"{prob_under_25*100:.1f}%", f"Απόδοση: {odd_under:.2f}")
-        col_ou2.metric("Over 2.5 Γκολ", f"{prob_over_25*100:.1f}%", f"Απόδοση: {odd_over:.2f}")
+        col_ou1.metric("Under 2.5 Γκολ", f"{prob_under_25*100:.1f}%", f"Απόδοση: {(1/prob_under_25 if prob_under_25 else 0):.2f}")
+        col_ou2.metric("Over 2.5 Γκολ", f"{prob_over_25*100:.1f}%", f"Απόδοση: {(1/prob_over_25 if prob_over_25 else 0):.2f}")
 

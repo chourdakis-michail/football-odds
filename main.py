@@ -1,153 +1,134 @@
-import math
-import pandas as pd
 import streamlit as st
+import math
+import requests
+import time
 
+st.set_page_config(page_title="Football Odds Predictor", layout="wide")
 
+API_KEY = "69207707d6f3499fae03851566eaa7be"
+BASE_URL = "https://api.football-data.org/v4/"
+
+headers = {
+    "X-Auth-Token": API_KEY
+}
+
+# Συνάρτηση υπολογισμού Poisson
 def poisson_probability(k, lambd):
-    return (lambd**k * math.exp(-lambd)) / math.factorial(k)
+    if lambd <= 0:
+        return 0.0
+    return (math.pow(lambd, k) * math.exp(-lambd)) / math.factorial(k)
 
+# Συνάρτηση ασφαλούς κλήσης API με διαχείριση Throttling
+def fetch_api_data(endpoint):
+    url = BASE_URL + endpoint
+    response = requests.get(url, headers=headers)
+    
+    # Διαχείριση Rate Limiting / Throttling
+    if response.status_code == 429:
+        retry_after = int(response.headers.get("X-RequestCounter-Reset", 60))
+        st.warning(f"Φτάσατε το όριο αιτημάτων. Αναμονή {retry_after} δευτερολέπτων...")
+        time.sleep(retry_after)
+        response = requests.get(url, headers=headers)
+        
+    if response.status_code == 200:
+        return response.json()
+    else:
+        st.error(f"Σφάλμα κατά την ανάκτηση δεδομένων (Code: {response.status_code})")
+        return None
 
-def calculate_match_odds(
-    home_scored,
-    home_conceded,
-    away_scored,
-    away_conceded,
-    league_home=1.50,
-    league_away=1.00,
-):
-    home_attack = home_scored / league_home
-    home_defense = home_conceded / league_away
-    away_attack = away_scored / league_away
-    away_defense = away_conceded / league_home
+st.title("⚽ Προβλεπτικό Μοντέλο Ποδοσφαίρου (Poisson API)")
 
-    lambda_home = home_attack * away_defense * league_home
-    lambda_away = away_attack * home_defense * league_away
+# Διαθέσιμα πρωταθλήματα στο Free Tier
+COMPETITIONS = {
+    "Premier League (Αγγλία)": "PL",
+    "La Liga (Ισπανία)": "PD",
+    "Serie A (Ιταλία)": "SA",
+    "Bundesliga (Γερμανία)": "BL1",
+    "Ligue 1 (Γαλλία)": "FL1",
+    "Eredivisie (Ολλανδία)": "DED",
+    "Primeira Liga (Πορτογαλία)": "PPD",
+    "Champions League": "CL"
+}
 
-    prob_home, prob_draw, prob_away = 0.0, 0.0, 0.0
-    prob_over25, prob_under25 = 0.0, 0.0
-    prob_gg, prob_ng = 0.0, 0.0
+selected_comp_label = st.selectbox("Επιλέξτε Πρωτάθλημα:", list(COMPETITIONS.keys()))
+comp_code = COMPETITIONS[selected_comp_label]
 
-    for h in range(7):
-        p_h = poisson_probability(h, lambda_home)
-        for a in range(7):
-            p_a = poisson_probability(a, lambda_away)
-            p_score = p_h * p_a
+if st.button("Φόρτωση Ομάδων & Βαθμολογίας"):
+    with st.spinner("Ανάκτηση δεδομένων από το Football-Data.org..."):
+        data = fetch_api_data(f"competitions/{comp_code}/standings")
+        if data and "standings" in data:
+            standings = data["standings"][0]["table"]
+            st.session_state["teams_data"] = standings
+            st.success("Τα δεδομένα φορτώθηκαν επιτυχώς!")
 
-            if h > a:
-                prob_home += p_score
-            elif h == a:
-                prob_draw += p_score
-            else:
-                prob_away += p_score
+if "teams_data" in st.session_state:
+    teams_list = [item["team"]["name"] for item in st.session_state["teams_data"]]
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        home_team_name = st.selectbox("Γηπεδούχος Ομάδα:", teams_list, index=0)
+    with col2:
+        away_team_name = st.selectbox("Φιλοξενούμενη Ομάδα:", teams_list, index=min(1, len(teams_list)-1))
 
-            if (h + a) > 2.5:
-                prob_over25 += p_score
-            else:
-                prob_under25 += p_score
+    # Υπολογισμός στατιστικών από τη βαθμολογία
+    home_stats = next(item for item in st.session_state["teams_data"] if item["team"]["name"] == home_team_name)
+    away_stats = next(item for item in st.session_state["teams_data"] if item["team"]["name"] == away_team_name)
 
-            if h > 0 and a > 0:
-                prob_gg += p_score
-            else:
-                prob_ng += p_score
+    home_played = home_stats["playedGames"] if home_stats["playedGames"] > 0 else 1
+    away_played = away_stats["playedGames"] if away_stats["playedGames"] > 0 else 1
 
-    return {
-        "lambda_home": round(lambda_home, 2),
-        "lambda_away": round(lambda_away, 2),
-        "1": (prob_home, 1 / prob_home if prob_home > 0 else 0),
-        "X": (prob_draw, 1 / prob_draw if prob_draw > 0 else 0),
-        "2": (prob_away, 1 / prob_away if prob_away > 0 else 0),
-        "Over 2.5": (prob_over25, 1 / prob_over25 if prob_over25 > 0 else 0),
-        "Under 2.5": (
-            prob_under25,
-            1 / prob_under25 if prob_under25 > 0 else 0,
-        ),
-        "GG": (prob_gg, 1 / prob_gg if prob_gg > 0 else 0),
-        "NG": (prob_ng, 1 / prob_ng if prob_ng > 0 else 0),
-    }
+    home_gf_avg = home_stats["goalsFor"] / home_played
+    home_ga_avg = home_stats["goalsAgainst"] / home_played
 
+    away_gf_avg = away_stats["goalsFor"] / away_played
+    away_ga_avg = away_stats["goalsAgainst"] / away_played
 
-st.set_page_config(
-    page_title="Football Odds Predictor", page_icon="⚽", layout="wide"
-)
-st.title("⚽ Προβλεπτικό Μοντέλο Ποδοσφαίρου (Poisson)")
-
-st.sidebar.header("📊 Μέσοι Όροι Πρωταθλήματος")
-league_home = st.sidebar.number_input(
-    "Μ.Ο. Γκολ Γηπεδούχων Πρωταθλήματος", value=1.50, step=0.05
-)
-league_away = st.sidebar.number_input(
-    "Μ.Ο. Γκολ Φιλοξενούμενων Πρωταθλήματος", value=1.00, step=0.05
-)
-
-st.subheader("Στατιστικά Αγώνα")
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("### 🏠 Γηπεδούχος Ομάδα")
-    home_name = st.text_input("Όνομα Γηπεδούχου", value="Ολυμπιακός")
-    home_scored = st.number_input(
-        f"Μ.Ο. Γκολ που σκοράρει εντός ({home_name})", value=2.10, step=0.1
-    )
-    home_conceded = st.number_input(
-        f"Μ.Ο. Γκολ που δέχεται εντός ({home_name})", value=0.75, step=0.1
-    )
-
-with col2:
-    st.markdown("### ✈️ Φιλοξενούμενη Ομάδα")
-    away_name = st.text_input("Όνομα Φιλοξενούμενου", value="ΠΑΟΚ")
-    away_scored = st.number_input(
-        f"Μ.Ο. Γκολ που σκοράρει εκτός ({away_name})", value=1.20, step=0.1
-    )
-    away_conceded = st.number_input(
-        f"Μ.Ο. Γκολ που δέχεται εκτός ({away_name})", value=1.20, step=0.1
-    )
-
-if st.button("🚀 Υπολογισμός Αποδόσεων", type="primary"):
-    res = calculate_match_odds(
-        home_scored,
-        home_conceded,
-        away_scored,
-        away_conceded,
-        league_home,
-        league_away,
-    )
+    # Υπολογισμός Μέσου Όρου Πρωταθλήματος
+    total_goals = sum(item["goalsFor"] for item in st.session_state["teams_data"])
+    total_games = sum(item["playedGames"] for item in st.session_state["teams_data"]) / 2
+    league_avg_goals = (total_goals / total_games / 2) if total_games > 0 else 1.3
 
     st.markdown("---")
-    st.subheader(f"🎯 Αποτελέσματα: {home_name} vs {away_name}")
+    st.subheader("Στατιστικά Μέσων Όρων")
+    c1, c2 = st.columns(2)
+    c1.write(f"**{home_team_name}**: {home_gf_avg:.2f} γκολ/αγώνα (Σκοράρει), {home_ga_avg:.2f} γκολ/αγώνα (Δέχεται)")
+    c2.write(f"**{away_team_name}**: {away_gf_avg:.2f} γκολ/αγώνα (Σκοράρει), {away_ga_avg:.2f} γκολ/αγώνα (Δέχεται)")
 
-    m1, m2 = st.columns(2)
-    m1.metric("Expected Goals (xG) Γηπεδούχου", res["lambda_home"])
-    m2.metric("Expected Goals (xG) Φιλοξενούμενου", res["lambda_away"])
+    if st.button("Υπολογισμός Πιθανοτήτων Poisson"):
+        # Υπολογισμός xG
+        attack_home = home_gf_avg / league_avg_goals if league_avg_goals else 1
+        defense_away = away_ga_avg / league_avg_goals if league_avg_goals else 1
+        lambda_home = attack_home * defense_away * league_avg_goals
 
-    data = {
-        "Αγορά": [
-            "1 (Νίκη Γηπεδούχου)",
-            "X (Ισοπαλία)",
-            "2 (Νίκη Φιλοξενούμενου)",
-            "Over 2.5 Goals",
-            "Under 2.5 Goals",
-            "Goal / Goal (GG)",
-            "No Goal (NG)",
-        ],
-        "Πιθανότητα (%)": [
-            f"{res['1'][0]*100:.1f}%",
-            f"{res['X'][0]*100:.1f}%",
-            f"{res['2'][0]*100:.1f}%",
-            f"{res['Over 2.5'][0]*100:.1f}%",
-            f"{res['Under 2.5'][0]*100:.1f}%",
-            f"{res['GG'][0]*100:.1f}%",
-            f"{res['NG'][0]*100:.1f}%",
-        ],
-        "Δίκαιη Απόδοση": [
-            f"{res['1'][1]:.2f}",
-            f"{res['X'][1]:.2f}",
-            f"{res['2'][1]:.2f}",
-            f"{res['Over 2.5'][1]:.2f}",
-            f"{res['Under 2.5'][1]:.2f}",
-            f"{res['GG'][1]:.2f}",
-            f"{res['NG'][1]:.2f}",
-        ],
-    }
+        attack_away = away_gf_avg / league_avg_goals if league_avg_goals else 1
+        defense_home = home_ga_avg / league_avg_goals if league_avg_goals else 1
+        lambda_away = attack_away * defense_home * league_avg_goals
 
-    st.table(pd.DataFrame(data))
+        # Υπολογισμός Πλέγματος Πιθανοτήτων
+        max_goals = 6
+        prob_home_win = 0.0
+        prob_draw = 0.0
+        prob_away_win = 0.0
+
+        for h in range(max_goals):
+            for a in range(max_goals):
+                p = poisson_probability(h, lambda_home) * poisson_probability(a, lambda_away)
+                if h > a:
+                    prob_home_win += p
+                elif h == a:
+                    prob_draw += p
+                else:
+                    prob_away_win += p
+
+        st.markdown("---")
+        st.subheader("Αποτελέσματα & Fair Odds")
+        col_res1, col_res2, col_res3 = st.columns(3)
+
+        odd_home = 1 / prob_home_win if prob_home_win > 0 else 0
+        odd_draw = 1 / prob_draw if prob_draw > 0 else 0
+        odd_away = 1 / prob_away_win if prob_away_win > 0 else 0
+
+        col_res1.metric("1 (Νίκη Γηπεδούχου)", f"{prob_home_win*100:.1f}%", f"Απόδοση: {odd_home:.2f}")
+        col_res2.metric("X (Ισοπαλία)", f"{prob_draw*100:.1f}%", f"Απόδοση: {odd_draw:.2f}")
+        col_res3.metric("2 (Νίκη Φιλοξενούμενου)", f"{prob_away_win*100:.1f}%", f"Απόδοση: {odd_away:.2f}")
 

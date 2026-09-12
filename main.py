@@ -89,7 +89,7 @@ if "teams_data" in st.session_state:
     league_avg_goals = (total_goals / total_games / 2) if total_games > 0 else 1.3
 
     st.markdown("---")
-    st.subheader("Στατιστικά Μέσων Όρων")
+    st.subheader("📊 Στατιστικά Μέσων Όρων")
     c1, c2 = st.columns(2)
     c1.write(f"**{home_team_name}**: {home_gf_avg:.2f} γκολ/αγώνα (Σκοράρει), {home_ga_avg:.2f} γκολ/αγώνα (Δέχεται)")
     c2.write(f"**{away_team_name}**: {away_gf_avg:.2f} γκολ/αγώνα (Σκοράρει), {away_ga_avg:.2f} γκολ/αγώνα (Δέχεται)")
@@ -105,23 +105,34 @@ if "teams_data" in st.session_state:
         lambda_away = attack_away * defense_home * league_avg_goals
 
         # Υπολογισμός Πλέγματος Πιθανοτήτων
-        max_goals = 6
+        max_goals = 7
         prob_home_win = 0.0
         prob_draw = 0.0
         prob_away_win = 0.0
+        
+        prob_under_25 = 0.0
+        prob_over_25 = 0.0
 
         for h in range(max_goals):
             for a in range(max_goals):
                 p = poisson_probability(h, lambda_home) * poisson_probability(a, lambda_away)
+                
+                # 1X2
                 if h > a:
                     prob_home_win += p
                 elif h == a:
                     prob_draw += p
                 else:
                     prob_away_win += p
+                
+                # Over / Under 2.5
+                if (h + a) < 2.5:
+                    prob_under_25 += p
+                else:
+                    prob_over_25 += p
 
         st.markdown("---")
-        st.subheader("Αποτελέσματα & Fair Odds")
+        st.subheader("🎯 Αποτελέσματα Αγώνα (1X2) & Fair Odds")
         col_res1, col_res2, col_res3 = st.columns(3)
 
         odd_home = 1 / prob_home_win if prob_home_win > 0 else 0
@@ -131,4 +142,14 @@ if "teams_data" in st.session_state:
         col_res1.metric("1 (Νίκη Γηπεδούχου)", f"{prob_home_win*100:.1f}%", f"Απόδοση: {odd_home:.2f}")
         col_res2.metric("X (Ισοπαλία)", f"{prob_draw*100:.1f}%", f"Απόδοση: {odd_draw:.2f}")
         col_res3.metric("2 (Νίκη Φιλοξενούμενου)", f"{prob_away_win*100:.1f}%", f"Απόδοση: {odd_away:.2f}")
+
+        st.markdown("---")
+        st.subheader("⚽ Αγορά Γκολ (Over / Under 2.5)")
+        col_ou1, col_ou2 = st.columns(2)
+
+        odd_under = 1 / prob_under_25 if prob_under_25 > 0 else 0
+        odd_over = 1 / prob_over_25 if prob_over_25 > 0 else 0
+
+        col_ou1.metric("Under 2.5 Γκολ", f"{prob_under_25*100:.1f}%", f"Απόδοση: {odd_under:.2f}")
+        col_ou2.metric("Over 2.5 Γκολ", f"{prob_over_25*100:.1f}%", f"Απόδοση: {odd_over:.2f}")
 

@@ -2,6 +2,8 @@ import streamlit as st
 import math
 import requests
 import time
+import numpy as np
+from scipy.stats import poisson
 
 st.set_page_config(page_title="Football Odds Predictor", layout="wide")
 
@@ -155,4 +157,54 @@ if "teams_data" in st.session_state:
         col_ou1, col_ou2 = st.columns(2)
         col_ou1.metric("Under 2.5 Γκολ", f"{prob_under_25*100:.1f}%", f"Απόδοση: {(1/prob_under_25 if prob_under_25 else 0):.2f}")
         col_ou2.metric("Over 2.5 Γκολ", f"{prob_over_25*100:.1f}%", f"Απόδοση: {(1/prob_over_25 if prob_over_25 else 0):.2f}")
+        # --- ΠΡΟΒΛΕΨΗ ΚΟΡΝΕΡ ---
+st.markdown("---")
+st.header("⛳ Πρόβλεψη & Αποδόσεις Κόρνερ")
+
+col_c1, col_c2 = st.columns(2)
+with col_c1:
+    home_corners = st.number_input(
+        "Μ.Ο. Κόρνερ Γηπεδούχου (Εντός)",
+        min_value=0.0,
+        value=5.5,
+        step=0.1,
+        key="hc",
+    )
+with col_c2:
+    away_corners = st.number_input(
+        "Μ.Ο. Κόρνερ Φιλοξενούμενης (Εκτός)",
+        min_value=0.0,
+        value=4.2,
+        step=0.1,
+        key="ac",
+    )
+
+if st.button("Υπολογισμός Κόρνερ", key="btn_corners"):
+    expected_corners = home_corners + away_corners
+    corners_range = np.arange(0, 26)
+    probs = poisson.pmf(corners_range, expected_corners)
+
+    st.subheader(f"🎯 Αναμενόμενα Κόρνερ Αγώνα: **{expected_corners:.2f}**")
+
+    lines = [8.5, 9.5, 10.5, 11.5]
+    data_matrix = []
+
+    for line in lines:
+        under_prob = np.sum(probs[corners_range < line])
+        over_prob = 1.0 - under_prob
+
+        fair_under = (1 / under_prob) if under_prob > 0 else 0
+        fair_over = (1 / over_prob) if over_prob > 0 else 0
+
+        data_matrix.append({
+            "Όριο": f"Over/Under {line}",
+            "Πιθανότητα Over": f"{over_prob * 100:.1f}%",
+            "Fair Over": f"{fair_over:.2f}",
+            "Πιθανότητα Under": f"{under_prob * 100:.1f}%",
+            "Fair Under": f"{fair_under:.2f}",
+        })
+
+    st.table(data_matrix)
+
+
 
